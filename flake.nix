@@ -12,31 +12,26 @@
       systems = [ "x86_64-linux" ];
       forAll = nixpkgs.lib.genAttrs systems;
 
-      # Build the module against an arbitrary kernel derivation.
-      iavfFor = pkgs: kernel:
-        pkgs.stdenv.mkDerivation {
+      # callPackage function: built inside a kernel package set so that
+      # kernelModuleMakeFlags (CC/ARCH/HOSTCC for the kernel build) is injected.
+      iavfModule = { stdenv, lib, fetchurl, kmod, kernel, kernelModuleMakeFlags }:
+        stdenv.mkDerivation {
           pname = "iavf";
           inherit version;
-          src = pkgs.fetchurl {
+          src = fetchurl {
             url = "https://github.com/intel/ethernet-linux-iavf/releases/download/v${version}/iavf-${version}.tar.gz";
             inherit sha256;
           };
           sourceRoot = "iavf-${version}/src";
-          hardeningDisable = [ "pic" "format" ];
-          nativeBuildInputs = kernel.moduleBuildDependencies;
-          # Build the module directly against the kernel build tree. KSRC is
-          # pinned because the Intel makefile autodetects the kernel tree from
-          # uname -r, which in the Nix sandbox is the builder, not the target.
-          # kernel.makeFlags is intentionally not used: it carries kernel-build
-          # flags (O=, --eval) that break an external module build.
-          buildPhase = ''
-            runHook preBuild
-            make -C "${kernel.dev}/lib/modules/${kernel.modDirVersion}/build" \
-              M="$(pwd)" \
-              KSRC="${kernel.dev}/lib/modules/${kernel.modDirVersion}/build" \
-              modules
-            runHook postBuild
-          '';
+          hardeningDisable = [ "format" "pic" ];
+          nativeBuildInputs = [ kmod ] ++ kernel.moduleBuildDependencies;
+          # Intel's Makefile builds standalone (its default target runs
+          # -C $(KSRC) M=$(CURDIR) modules itself). KSRC is pinned because its
+          # own autodetect keys off uname -r, which in the Nix sandbox is the
+          # builder, not the target kernel.
+          makeFlags = kernelModuleMakeFlags ++ [
+            "KSRC=${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
+          ];
           installPhase = ''
             runHook preInstall
             install -Dm644 iavf.ko \
@@ -50,19 +45,25 @@
             platforms = [ "x86_64-linux" ];
           };
         };
+
+      iavfFor = pkgs: kernel:
+        (pkgs.linuxPackagesFor kernel).callPackage iavfModule { };
     in
     {
       # Overlay: adds `iavf-intel` to every kernel package set, so a NixOS
-      # config can use `boot.extraModulePackages = [ config.boot.kernelPackages.iavf-intel ];`
+      # config can use:
+      #   boot.extraModulePackages = [ config.boot.kernelPackages.iavf-intel ];
       overlays.default = final: prev: {
         linuxKernel = prev.linuxKernel // {
           packagesFor = kernel:
             (prev.linuxKernel.packagesFor kernel).extend
-              (lpfinal: lpprev: { iavf-intel = iavfFor final kernel; });
+              (lpfinal: lpprev: {
+                iavf-intel = lpfinal.callPackage iavfModule { };
+              });
         };
       };
 
-      # `nix build` against the default kernel (CI build check + quick local test).
+      # `nix build` against the default kernel (CI build check + local test).
       packages = forAll (system:
         let pkgs = nixpkgs.legacyPackages.${system};
         in {
