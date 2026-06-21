@@ -25,7 +25,13 @@
           # Keep the full tree: src/Makefile reaches up to ../kcompat-generator.sh
           # and ../kcompat-gen, so sourceRoot must not be narrowed to src/.
           sourceRoot = "iavf-${version}";
-          preBuild = "cd src";
+          # common.mk references $(src) for kcompat-generator.sh; Nix exports
+          # $src as the tarball path, which clobbers it. Pin src to the source
+          # dir. The full tree is kept so ../scripts/check_aux_bus resolves.
+          preBuild = ''
+            cd src
+            export src="$PWD"
+          '';
           hardeningDisable = [ "format" "pic" ];
           nativeBuildInputs = [ kmod which ] ++ kernel.moduleBuildDependencies;
           # Intel's Makefile builds standalone (its default target runs
