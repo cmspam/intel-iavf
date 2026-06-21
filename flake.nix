@@ -14,7 +14,7 @@
 
       # callPackage function: built inside a kernel package set so that
       # kernelModuleMakeFlags (CC/ARCH/HOSTCC for the kernel build) is injected.
-      iavfModule = { stdenv, lib, fetchurl, kmod, kernel, kernelModuleMakeFlags }:
+      iavfModule = { stdenv, lib, fetchurl, kmod, which, kernel, kernelModuleMakeFlags }:
         stdenv.mkDerivation {
           pname = "iavf";
           inherit version;
@@ -22,9 +22,12 @@
             url = "https://github.com/intel/ethernet-linux-iavf/releases/download/v${version}/iavf-${version}.tar.gz";
             inherit sha256;
           };
-          sourceRoot = "iavf-${version}/src";
+          # Keep the full tree: src/Makefile reaches up to ../kcompat-generator.sh
+          # and ../kcompat-gen, so sourceRoot must not be narrowed to src/.
+          sourceRoot = "iavf-${version}";
+          preBuild = "cd src";
           hardeningDisable = [ "format" "pic" ];
-          nativeBuildInputs = [ kmod ] ++ kernel.moduleBuildDependencies;
+          nativeBuildInputs = [ kmod which ] ++ kernel.moduleBuildDependencies;
           # Intel's Makefile builds standalone (its default target runs
           # -C $(KSRC) M=$(CURDIR) modules itself). KSRC is pinned because its
           # own autodetect keys off uname -r, which in the Nix sandbox is the
