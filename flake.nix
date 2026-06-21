@@ -15,6 +15,14 @@
       # callPackage function: built inside a kernel package set so that
       # kernelModuleMakeFlags (CC/ARCH/HOSTCC for the kernel build) is injected.
       iavfModule = { stdenv, lib, fetchurl, kmod, which, kernel, kernelModuleMakeFlags }:
+        let
+          kdir = "${kernel.dev}/lib/modules/${kernel.modDirVersion}";
+          # kernelModuleMakeFlags sets KBUILD_OUTPUT to the read-only build tree
+          # and may set KSRC; drop both so our merged, writable KSRC wins.
+          ccFlags = builtins.filter
+            (f: !(lib.hasPrefix "KBUILD_OUTPUT=" f) && !(lib.hasPrefix "KSRC=" f))
+            kernelModuleMakeFlags;
+        in
         stdenv.mkDerivation {
           pname = "iavf";
           inherit version;
@@ -23,24 +31,33 @@
             inherit sha256;
           };
           # Keep the full tree: src/Makefile reaches up to ../kcompat-generator.sh
-          # and ../kcompat-gen, so sourceRoot must not be narrowed to src/.
+          # and ../scripts, so sourceRoot must not be narrowed to src/.
           sourceRoot = "iavf-${version}";
-          # common.mk references $(src) for kcompat-generator.sh; Nix exports
-          # $src as the tarball path, which clobbers it. Pin src to the source
-          # dir. The full tree is kept so ../scripts/check_aux_bus resolves.
+          hardeningDisable = [ "format" "pic" ];
+          nativeBuildInputs = [ kmod which ] ++ kernel.moduleBuildDependencies;
+          makeFlags = ccFlags;
+          # Intel's common.mk / kcompat-generator want a single unified kernel
+          # tree (headers + generated + Module.symvers). nixpkgs splits these:
+          # source/ has the headers, build/ has generated + .config + symvers.
+          # Build a writable merged tree and point KSRC/KBUILD_OUTPUT at it.
+          # Also pin $src (Nix exports it as the tarball path, clobbering the
+          # src make variable common.mk uses to find kcompat-generator.sh).
           preBuild = ''
             cd src
             export src="$PWD"
+            ksrc="$NIX_BUILD_TOP/ksrc"
+            mkdir -p "$ksrc"
+            cp -as ${kdir}/source/. "$ksrc/"
+            chmod -R u+w "$ksrc"
+            cp -asf ${kdir}/build/. "$ksrc/"
+            chmod -R u+w "$ksrc"
+            # kbuild may rewrite the top Makefile; the overlaid one is a symlink
+            # into the read-only store. Replace it with a real, writable copy.
+            rm -f "$ksrc/Makefile"
+            cp -L ${kdir}/source/Makefile "$ksrc/Makefile"
+            chmod u+w "$ksrc/Makefile"
+            export KSRC="$ksrc"
           '';
-          hardeningDisable = [ "format" "pic" ];
-          nativeBuildInputs = [ kmod which ] ++ kernel.moduleBuildDependencies;
-          # Intel's Makefile builds standalone (its default target runs
-          # -C $(KSRC) M=$(CURDIR) modules itself). KSRC is pinned because its
-          # own autodetect keys off uname -r, which in the Nix sandbox is the
-          # builder, not the target kernel.
-          makeFlags = kernelModuleMakeFlags ++ [
-            "KSRC=${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
-          ];
           installPhase = ''
             runHook preInstall
             install -Dm644 iavf.ko \
