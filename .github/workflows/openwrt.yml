@@ -84,8 +84,10 @@ jobs:
       - name: Build kmod-iavf-intel for OpenWrt ${{ matrix.version }}
         run: |
           set -euo pipefail
+          sde=$(git log -1 --format=%ct)
           mkdir -p out && chmod 777 out
           docker run --rm \
+            -e SOURCE_DATE_EPOCH="$sde" \
             -v "$PWD/out:/out" -v "$PWD/openwrt/package:/pkg:ro" \
             "ghcr.io/openwrt/sdk:x86-64-${{ matrix.version }}" \
             bash -c '

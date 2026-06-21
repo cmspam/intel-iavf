@@ -55,6 +55,7 @@ jobs:
         if: steps.gate.outputs.build == 'true'
         run: |
           set -euo pipefail
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
           ver="${{ steps.gate.outputs.ver }}"
           sha="${{ steps.gate.outputs.sha }}"
           curl -fsSL -o iavf.tar.gz "https://github.com/intel/ethernet-linux-iavf/releases/download/v${ver}/iavf-${ver}.tar.gz"

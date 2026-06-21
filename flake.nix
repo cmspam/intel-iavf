@@ -22,20 +22,26 @@
             inherit sha256;
           };
           sourceRoot = "iavf-${version}/src";
-          hardeningDisable = [ "pic" ];
+          hardeningDisable = [ "pic" "format" ];
           nativeBuildInputs = kernel.moduleBuildDependencies;
-          # KSRC is pinned: the Intel makefile autodetects the kernel tree from
+          # Build the module directly against the kernel build tree. KSRC is
+          # pinned because the Intel makefile autodetects the kernel tree from
           # uname -r, which in the Nix sandbox is the builder, not the target.
-          makeFlags = kernel.makeFlags ++ [
-            "-C"
-            "${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
-            "M=$(PWD)"
-            "KSRC=${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
-            "modules"
-          ];
+          # kernel.makeFlags is intentionally not used: it carries kernel-build
+          # flags (O=, --eval) that break an external module build.
+          buildPhase = ''
+            runHook preBuild
+            make -C "${kernel.dev}/lib/modules/${kernel.modDirVersion}/build" \
+              M="$(pwd)" \
+              KSRC="${kernel.dev}/lib/modules/${kernel.modDirVersion}/build" \
+              modules
+            runHook postBuild
+          '';
           installPhase = ''
+            runHook preInstall
             install -Dm644 iavf.ko \
               "$out/lib/modules/${kernel.modDirVersion}/updates/dkms/iavf.ko"
+            runHook postInstall
           '';
           meta = with nixpkgs.lib; {
             description = "Intel out-of-tree iavf VF driver";
