@@ -1,0 +1,104 @@
+name: openwrt
+
+# Build kmod-iavf-intel for the OpenWrt stable lines and publish one release
+# per OpenWrt version. The pinned driver version (openwrt Makefile) is
+# maintained by update.yml. A version is (re)built when no release exists for
+# it yet or when its release was built with an older driver.
+on:
+  schedule:
+    - cron: '53 5 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'openwrt/**'
+      - '.github/workflows/openwrt.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'OpenWrt version to build (blank = current stable + oldstable)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openwrt
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.pick.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT: ${{ github.event.inputs.version }}
+          DOCKER_CLI_EXPERIMENTAL: enabled
+        run: |
+          set -euo pipefail
+          drv=$(sed -n 's/^PKG_VERSION:=//p' openwrt/package/iavf-intel/Makefile)
+          echo "pinned iavf driver: $drv"
+          want=()
+          if [ -n "${INPUT:-}" ]; then
+            want+=("$INPUT")
+          else
+            meta=$(curl -fsSL https://downloads.openwrt.org/.versions.json)
+            for k in stable_version oldstable_version; do
+              v=$(printf '%s' "$meta" | jq -r ".${k} // empty")
+              [ -n "$v" ] && want+=("$v")
+            done
+          fi
+          out=()
+          for v in "${want[@]}"; do
+            if ! docker manifest inspect "ghcr.io/openwrt/sdk:x86-64-$v" >/dev/null 2>&1; then
+              echo "skip $v: no SDK image"; continue
+            fi
+            assets=$(gh release view "$v" -R "$REPO" --json assets -q '.assets[].name' 2>/dev/null || true)
+            if printf '%s\n' "$assets" | grep -q "iavf-intel-.*\.${drv}-"; then
+              echo "skip $v: already built with iavf $drv"; continue
+            fi
+            out+=("$v")
+          done
+          json=$(printf '%s\n' "${out[@]:-}" | sed '/^$/d' | jq -R . | jq -cs .)
+          echo "to build: $json"
+          echo "versions=$json" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.versions != '[]' && needs.discover.outputs.versions != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.discover.outputs.versions) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build kmod-iavf-intel for OpenWrt ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p out && chmod 777 out
+          docker run --rm \
+            -v "$PWD/out:/out" -v "$PWD/openwrt/package:/pkg:ro" \
+            "ghcr.io/openwrt/sdk:x86-64-${{ matrix.version }}" \
+            bash -c '
+              set -e
+              cp -r /pkg/iavf-intel package/iavf-intel
+              make defconfig
+              make package/iavf-intel/compile V=s
+              find bin -type f \( -name "*iavf-intel*.apk" -o -name "*iavf-intel*.ipk" \) -exec cp -v {} /out/ \;'
+          ls -l out; test -n "$(ls -A out)"
+      - name: Publish release ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          ver="${{ matrix.version }}"
+          notes="Intel out-of-tree iavf VF driver built against OpenWrt $ver (x86/64). Install on a matching OpenWrt $ver system: apk add --allow-untrusted ./kmod-iavf-intel-*.apk (25.12+) or opkg install ./kmod-iavf-intel-*.ipk (24.10 and earlier). Replaces the in-tree kmod-iavf; remove that package first."
+          gh release delete "$ver" -R "$REPO" --yes 2>/dev/null || true
+          gh release create "$ver" out/* -R "$REPO" --title "OpenWrt $ver" --notes "$notes"

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+NAME=iavf
+VERSION=__VERSION__
+if [ "$1" = configure ]; then
+    dkms add -m "$NAME" -v "$VERSION" 2>/dev/null || true
+    dkms build -m "$NAME" -v "$VERSION"
+    dkms install -m "$NAME" -v "$VERSION" --force
+fi

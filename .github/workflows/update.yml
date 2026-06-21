@@ -1,0 +1,52 @@
+name: update
+
+# Track the latest stable Intel ethernet-linux-iavf release. When it changes,
+# bump the single pinned version + checksum across the Arch PKGBUILD, the
+# OpenWrt Makefile, and the Nix flake, commit, and kick off the per-target
+# build workflows. This is the only place the version is bumped.
+on:
+  schedule:
+    - cron: '11 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump to latest stable iavf
+        run: |
+          set -euo pipefail
+          eval "$(bash scripts/latest-iavf.sh)"   # sets: version, url, sha256
+          cur=$(sed -n 's/^pkgver=//p' arch/PKGBUILD)
+          echo "current=$cur latest=$version"
+          if [ "$version" = "$cur" ]; then
+            echo "already at latest"; exit 0
+          fi
+
+          sed -i -e "s/^pkgver=.*/pkgver=${version}/" \
+                 -e "s|^sha256sums=.*|sha256sums=('${sha256}')|" arch/PKGBUILD
+          sed -i -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${version}/" \
+                 -e "s/^PKG_HASH:=.*/PKG_HASH:=${sha256}/" openwrt/package/iavf-intel/Makefile
+          sed -i -e "s/\(version = \"\)[^\"]*\(\";\)/\1${version}\2/" \
+                 -e "s/\(sha256 = \"\)[^\"]*\(\";\)/\1${sha256}\2/" flake.nix
+
+          git config user.name cmspam
+          git config user.email cmspam@users.noreply.github.com
+          git commit -am "iavf: bump to ${version}"
+          git push
+
+          for wf in arch.yml openwrt.yml debian.yml nix.yml; do
+            gh workflow run "$wf" -R "$REPO" || true
+          done

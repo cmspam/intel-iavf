@@ -1,0 +1,12 @@
+Package: iavf-dkms
+Version: __VERSION__
+Architecture: all
+Maintainer: cmspam <cmspam@users.noreply.github.com>
+Depends: dkms
+Section: kernel
+Priority: optional
+Description: Intel out-of-tree iavf VF driver (DKMS)
+ Builds the Intel ethernet-linux-iavf module via DKMS against the running
+ kernel. Keeps the pre-page-pool RX queue-config ABI required by some
+ hypervisor PF drivers (e.g. VMware ESXi i40en) on kernels 6.10 and newer.
+ Selected over the in-kernel iavf via a depmod override.

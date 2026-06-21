@@ -1,0 +1,28 @@
+name: nix
+
+# Build the flake against the default nixpkgs kernel to confirm the module
+# compiles. Nix consumers use the flake directly from the repo, so there is
+# nothing to publish; this is a build-health check.
+on:
+  schedule:
+    - cron: '31 6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/nix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: "experimental-features = nix-command flakes"
+      - run: nix build .#iavf -L

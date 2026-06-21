@@ -1,0 +1,87 @@
+name: debian
+
+# Build a standalone source-DKMS .deb (Architecture: all) and publish it on the
+# 'debian' release. Debian/Proxmox users install it manually
+# (apt install ./iavf-dkms_<ver>_all.deb); DKMS compiles the module against
+# their running kernel at install time (needs linux-headers-$(uname -r)).
+# The pinned version is read from arch/PKGBUILD (maintained by update.yml);
+# package files come from debian/ templates with __VERSION__ substituted.
+on:
+  schedule:
+    - cron: '07 6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'arch/PKGBUILD'
+      - 'debian/**'
+      - '.github/workflows/debian.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: debian
+  cancel-in-progress: false
+
+env:
+  TAG: debian
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version + gate
+        id: gate
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^pkgver=//p' arch/PKGBUILD)
+          sha=$(sed -nE "s/^sha256sums=\('([0-9a-f]+)'\)/\1/p" arch/PKGBUILD)
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          assets=$(gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name' 2>/dev/null || true)
+          if printf '%s\n' "$assets" | grep -q "iavf-dkms_${ver}_all.deb"; then
+            echo "iavf-dkms $ver already published"; echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Assemble source-DKMS .deb
+        if: steps.gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          ver="${{ steps.gate.outputs.ver }}"
+          sha="${{ steps.gate.outputs.sha }}"
+          curl -fsSL -o iavf.tar.gz "https://github.com/intel/ethernet-linux-iavf/releases/download/v${ver}/iavf-${ver}.tar.gz"
+          echo "$sha  iavf.tar.gz" | sha256sum -c -
+          tar xzf iavf.tar.gz
+
+          root=pkgroot
+          src="iavf-${ver}"
+          mkdir -p "$root/DEBIAN" "$root/usr/src/$src" "$root/usr/lib/depmod.d"
+          cp -a "$src/." "$root/usr/src/$src/"
+          sed "s/__VERSION__/$ver/g" debian/dkms.conf > "$root/usr/src/$src/dkms.conf"
+          cp debian/depmod.conf "$root/usr/lib/depmod.d/00-iavf-dkms.conf"
+          sed "s/__VERSION__/$ver/g" debian/control  > "$root/DEBIAN/control"
+          sed "s/__VERSION__/$ver/g" debian/postinst > "$root/DEBIAN/postinst"
+          sed "s/__VERSION__/$ver/g" debian/prerm    > "$root/DEBIAN/prerm"
+          chmod 0755 "$root/DEBIAN/postinst" "$root/DEBIAN/prerm"
+
+          mkdir -p out
+          dpkg-deb --root-owner-group --build "$root" "out/iavf-dkms_${ver}_all.deb"
+          echo "=== control ==="; dpkg-deb -I "out/iavf-dkms_${ver}_all.deb"
+          echo "=== contents ==="; dpkg-deb -c "out/iavf-dkms_${ver}_all.deb"
+
+      - name: Publish .deb to '${{ env.TAG }}' release
+        if: steps.gate.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          ver="${{ steps.gate.outputs.ver }}"
+          notes="Standalone DKMS .deb for the Intel out-of-tree iavf driver (iavf-dkms ${ver}), for Debian / Proxmox. Install with: apt install ./iavf-dkms_${ver}_all.deb (needs linux-headers for the running kernel). DKMS builds the module locally; a depmod override selects it over the in-kernel iavf."
+          gh release delete "$TAG" -R "$REPO" --yes 2>/dev/null || true
+          gh release create "$TAG" out/* -R "$REPO" --title "iavf-dkms .deb (Debian/Proxmox)" --notes "$notes"
