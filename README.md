@@ -1,7 +1,8 @@
 # intel-iavf
 
-Out-of-tree builds of Intel's `ethernet-linux-iavf` Virtual Function driver,
-tracking the latest stable upstream release and published for several distros.
+Out-of-tree builds of Intel's `ethernet-linux-iavf` Virtual Function driver and
+`ethernet-linux-i40e` 700-Series PF driver, tracking the latest stable upstream
+releases and published for several distros.
 
 ## Why
 
@@ -12,6 +13,10 @@ able to transmit but not receive. VMware ESXi's `i40en` PF is the common case.
 Intel's standalone driver keeps the prior ABI, so this builds and packages it as
 a drop-in replacement for the in-kernel `iavf`.
 
+The matching `i40e` PF driver is packaged the same way (Arch/CachyOS DKMS) so a
+host can run Intel's out-of-tree 700-Series driver in place of the in-tree
+`i40e` when that behaves better.
+
 ## What is published
 
 A scheduled workflow tracks the latest stable Intel release and bumps a single
@@ -19,25 +24,30 @@ pinned version. Each target is then built and published:
 
 | Target | Artifact | Release tag |
 |---|---|---|
-| Arch / CachyOS | `iavf-dkms` pacman repo | `arch` |
+| Arch / CachyOS | `iavf-dkms` + `i40e-dkms` pacman repo | `arch` |
 | Debian / Proxmox | `iavf-dkms_<ver>_all.deb` | `debian` |
 | OpenWrt | `kmod-iavf-intel` apk / ipk, x86/64 | one per OpenWrt version |
 | Nix | flake (built from source by the consumer) | none |
 
-All builds carry a `depmod` override (`override iavf * updates/dkms`) so the
-out-of-tree module is selected over the identically named in-kernel `iavf`.
+`i40e-dkms` ships in the same `arch` pacman repo as `iavf-dkms`, so consumers
+add one repo. Every build carries a `depmod` override (`override iavf * ...` /
+`override i40e * ...`) so the out-of-tree module is selected over the identically
+named in-kernel one.
 
 ## Use
 
 ### Arch / CachyOS
 
-Add the pacman repo, then install `iavf-dkms`:
+Add the pacman repo, then install `iavf-dkms` and/or `i40e-dkms`:
 
 ```
 [iavf-dkms]
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/intel-iavf/releases/download/arch
 ```
+
+Both packages live in this one repo (`i40e-dkms` is the Intel 700-Series PF
+driver; `iavf-dkms` the VF driver).
 
 ### Debian / Proxmox
 
@@ -72,11 +82,13 @@ Replaces the in-tree `kmod-iavf`; remove that package first if present.
 
 ```
 arch/PKGBUILD                       Arch iavf-dkms package
+arch/i40e/PKGBUILD                  Arch i40e-dkms package
 openwrt/package/iavf-intel/Makefile OpenWrt kmod package
 flake.nix                           Nix module + overlay
-scripts/latest-iavf.sh              resolve latest stable upstream release
+scripts/latest-iavf.sh              resolve latest stable upstream iavf release
+scripts/latest-i40e.sh              resolve latest stable upstream i40e release
 .github/workflows/                  update + per-target build workflows
 ```
 
-The driver version is pinned in `arch/PKGBUILD`, `openwrt/.../Makefile`, and
-`flake.nix`, kept in sync by `update.yml`.
+Driver versions are pinned in `arch/PKGBUILD` (iavf, also `openwrt/.../Makefile`
+and `flake.nix`) and `arch/i40e/PKGBUILD` (i40e), kept in sync by `update.yml`.
