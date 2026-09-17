@@ -11,7 +11,7 @@ path. It now sends a queue configuration (`VIRTCHNL_OP_CONFIG_VSI_QUEUES`) that
 some PF drivers reject with `IAVF_ERR_PARAM`, leaving an SR-IOV virtual function
 able to transmit but not receive. VMware ESXi's `i40en` PF is the common case.
 Intel's standalone driver keeps the prior ABI, so this builds and packages it as
-a drop-in replacement for the in-kernel `iavf`.
+a drop-in replacement for the in-kernel `iavf`. 
 
 The matching `i40e` PF driver is packaged the same way (Arch/CachyOS DKMS) so a
 host can run Intel's out-of-tree 700-Series driver in place of the in-tree
